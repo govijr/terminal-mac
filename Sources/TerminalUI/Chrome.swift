@@ -5,6 +5,12 @@ public struct Span {
     public var text: String
     public var style: String = ""
     public init(_ text: String, _ style: String = "") { self.text = text; self.style = style }
+    /// Guest replies and typed labels are data, never terminal instructions.
+    public var safeText: String {
+        String(String.UnicodeScalarView(text.unicodeScalars.map {
+            $0.value < 0x20 || (0x7f...0x9f).contains($0.value) ? Unicode.Scalar(0xfffd)! : $0
+        }))
+    }
 }
 
 extension Array where Element == Span {
@@ -12,12 +18,12 @@ extension Array where Element == Span {
     public func truncated(_ limit: Int) -> [Span] {
         var result: [Span] = [], remaining = Swift.max(0, limit)
         for span in self where remaining > 0 {
-            if span.text.count <= remaining { result.append(span); remaining -= span.text.count }
-            else { result.append(Span(String(span.text.prefix(Swift.max(0, remaining - 1))) + "…", span.style)); remaining = 0 }
+            if span.safeText.count <= remaining { result.append(span); remaining -= span.safeText.count }
+            else { result.append(Span(String(span.safeText.prefix(Swift.max(0, remaining - 1))) + "…", span.style)); remaining = 0 }
         }
         return result
     }
-    public var rendered: String { map { $0.style.isEmpty ? $0.text : $0.style + $0.text + Theme.reset }.joined() }
+    public var rendered: String { map { $0.style.isEmpty ? $0.safeText : $0.style + $0.safeText + Theme.reset }.joined() }
 }
 
 /// Tokyo Night-flavoured palette. Respects NO_COLOR (https://no-color.org).
