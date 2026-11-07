@@ -40,6 +40,13 @@ mkdir -p "$app/Contents/MacOS" "$guest/Contents/MacOS"
 rm -f "$app/Contents/MacOS/terminal-mac" "$guest/Contents/MacOS/terminal-mac"
 cp "$binary_dir/terminal-mac" "$app/Contents/MacOS/terminal-mac"
 cp "$binary_dir/terminal-mac" "$guest/Contents/MacOS/terminal-mac"
+# gvproxy (scripts/fetch-gvproxy.sh) provides user-space networking for VMs created with --network user.
+rm -f "$app/Contents/MacOS/gvproxy"
+if [[ -x vendor/gvproxy/gvproxy ]]; then
+  cp vendor/gvproxy/gvproxy "$app/Contents/MacOS/gvproxy"
+else
+  echo 'No vendor/gvproxy/gvproxy; VMs with --network user will not start. Run scripts/fetch-gvproxy.sh to bundle it.' >&2
+fi
 make_plist() {
   local destination="$1" identifier="$2" name="$3"
   /usr/libexec/PlistBuddy -c 'Clear dict' "$destination" >/dev/null 2>&1 || true
@@ -60,6 +67,7 @@ make_plist "$guest/Contents/Info.plist" dev.terminal-mac.guest TerminalMacGuest
 make_plist "$app/Contents/Info.plist" dev.terminal-mac.host TerminalMac
 # Guest has no Virtualization entitlement. Its guarded mode only controls the VM desktop.
 codesign --force --sign "$identity" "${sign_options[@]}" "$guest"
+if [[ -f "$app/Contents/MacOS/gvproxy" ]]; then codesign --force --sign "$identity" "${sign_options[@]}" "$app/Contents/MacOS/gvproxy"; fi
 codesign --force --sign "$identity" "${sign_options[@]}" --entitlements resources/terminal-mac.entitlements "$app"
 ln -sfn TerminalMac.app/Contents/MacOS/terminal-mac dist/terminal-mac
 codesign --verify --deep --strict "$app"

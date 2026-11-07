@@ -10,3 +10,5 @@ dist/
 *.p12
 *.p8
 *.cer
+# Downloaded by scripts/fetch-gvproxy.sh
+vendor/gvproxy/

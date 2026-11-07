@@ -59,7 +59,7 @@ The tools only drive the guest helper. They never touch your own desktop. When t
 
 The first run opens the virtual Mac's window. Complete macOS setup and create its user account. Inside the guest, open Finder → `/Volumes/My Shared Files/tools` → `TerminalMacGuest.app` once. The helper installs itself in the guest's `~/Applications`, launches that installed copy and registers for future guest logins, subject to macOS approval.
 
-Use its two buttons to grant **Screen Recording** and **Accessibility** inside the guest. Reopen it if macOS asks. If needed, its **Guest Login Items** button opens the startup setting. The host needs neither privacy permission. Once both guest permissions are ready, the CLI automatically continues to the terminal desktop.
+Use its two buttons to grant **Screen Recording** and **Accessibility** inside the guest. Reopen it if macOS asks. If needed, its **Guest Login Items** button opens the startup setting. The host needs neither privacy permission. Once both guest permissions are ready, the CLI automatically continues to the terminal desktop. From then on the helper lives as a computer icon in the guest's menu bar: it opens at login without showing a window, the icon's menu shows the permission state, and **Open Setup Window…** brings the window back.
 
 This is guided setup, not an unattended guest installation. Apple documents automatic account provisioning for macOS 27 guests; this build targets the APIs available in the installed macOS 26 SDK and does not implement that newer flow. See [Apple's provisioning documentation](https://developer.apple.com/documentation/virtualization/vzmacguestprovisioningoptions).
 
@@ -103,6 +103,8 @@ Complete macOS Setup Assistant in the VM window and create a guest account. Insi
 1. Open Finder → `/Volumes/My Shared Files/tools`.
 2. Open `TerminalMacGuest.app`. It installs itself to the guest's `~/Applications` and opens the installed copy.
 3. Use the helper's buttons to grant **Screen Recording** and **Accessibility** in the guest's System Settings. Reopen the helper if macOS asks. The host does not need either permission.
+
+If both toggles are on but `terminal-mac action NAME status` still reports `false`, for example after a helper signed with a different identity replaced the one that was approved, run `terminal-mac action NAME permissions`. It clears the stale grants inside the guest and prompts again.
 4. Keep the guest logged in and the helper running. It registers itself for guest login; approve that setting if macOS requests it.
 
 On the host:
@@ -154,6 +156,19 @@ The agent instructions are in [docs/AGENT.md](docs/AGENT.md). No global agent se
 
 Customize a new VM with `--cpus 4 --memory 4 --disk 64 --width 1280 --height 800` (width and height are in points; add `--standard` for a 1x display). CPU, memory and disk arguments are logical CPUs, GiB and GiB respectively. `--offline` omits the guest network device; the shared-folder control channel still works, though some macOS setup workflows may require networking.
 
+### Networking
+
+By default the guest uses macOS NAT: the host hands out addresses on 192.168.64.0/24 and relays DNS at the gateway. VPN and proxy apps that run in TUN mode (Clash, Surge, sing-box and similar) can leave that relay silent, so the guest keeps an IP but cannot resolve names and looks offline. `--network user` instead bundles [gvproxy](https://github.com/containers/gvisor-tap-vsock) (Apache-2.0, the user-space network stack behind podman machine and vfkit) and runs DHCP, DNS and NAT in user space, with names resolved by the host's own resolver, so the guest stays online wherever the host is:
+
+```bash
+scripts/fetch-gvproxy.sh                              # once: download gvproxy into vendor/ (checksum pinned)
+scripts/build.sh                                      # bundles it into TerminalMac.app
+./dist/terminal-mac create default --ipsw … --network user
+./dist/terminal-mac network default --user            # or switch an existing, stopped VM (--nat, --offline)
+```
+
+In user mode the guest is 192.168.127.2 with gateway and DNS at 192.168.127.1; the host answers at 192.168.127.254 (`host.containers.internal`). gvproxy runs as a child of the VM's background process, logs to `runtime.log` and exits with it. `terminal-mac doctor` reports whether gvproxy is bundled; `status` reports the mode in use.
+
 VM data lives in `~/Library/Application Support/terminal-mac/machines/NAME/`. `TERMINAL_MAC_HOME` overrides the data root. Each VM has an exclusive file lock, a sparse disk, hardware identity, auxiliary boot storage, `machine.json`, a private host-control mailbox, the guest exchange directory, and `runtime.log`. A VM boot runs as a separate background process. Lifecycle commands must use the same `TERMINAL_MAC_HOME` as the process that started it.
 
 An interrupted or failed installation leaves its directory and `installed: false` for diagnosis. It is never silently overwritten. To retry, ensure no installer/VM is running, move that incomplete directory aside, then create the VM again. There is deliberately no destructive VM-delete command yet.
@@ -163,7 +178,7 @@ An interrupted or failed installation leaves its directory and `installed: false
 - Host input and screen APIs are not used for agent actions. The helper refuses to run unless `hw.model` starts with `VirtualMac`. That check prevents accidental host execution; it is not hardware attestation or a defense against a compromised host.
 - The guest sees two explicit shares: `control` (read/write, containing request/reply JSON and screenshots) and `tools` (read-only helper app). Host home, project folders, clipboard, microphone, and camera are not attached.
 - There is no remote-control network listener. The flat mailbox pins its directory, rejects symlinks, hardlinks and nonregular files on reads, bounds message sizes, checks request IDs, and expires pending actions. The host never executes guest-provided content.
-- Default NAT networking permits guest internet access and may reach services on the host or local network. This is **not** a network-isolated or hardened hostile-code environment. `--offline` removes that network path.
+- Default NAT networking, and user-space networking with `--network user`, permit guest internet access and may reach services on the host or local network. This is **not** a network-isolated or hardened hostile-code environment. `--offline` removes that network path.
 - A logged-out/locked guest, missing helper, denied guest permissions, or paused VM prevents normal computer use. TCC grants are interactive guest setup, not bypassed by the CLI.
 
 VM cloning, rollback checkpoints, accessibility snapshots, fully unattended guest setup, terminal splits and tmux transport remain future work. The native Virtualization framework does not itself render a Mac into a terminal or offer an agent input API; this project supplies the guest transport and terminal presentation layers.

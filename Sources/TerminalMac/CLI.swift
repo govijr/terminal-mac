@@ -16,6 +16,7 @@ final class CLI {
         executableURL
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/guest-tools")
     }
+    var gvproxyURL: URL { UserNetwork.executable(near: executableURL) }
     func run(_ input: [String], quietStartup: Bool = false) async throws {
         let command = input.first ?? (Bundle.main.bundleIdentifier == "dev.terminal-mac.guest" ? "guest" : (isatty(STDIN_FILENO) == 1 ? "up" : "help"))
         let tail = Array(input.dropFirst())
@@ -27,7 +28,8 @@ final class CLI {
             _ = try Arguments(tail)
             try printJSON(["architecture": "arm64", "virtualizationSupported": String(VZVirtualMachine.isSupported),
                            "macOS": ProcessInfo.processInfo.operatingSystemVersionString, "dataDirectory": store.root.path,
-                           "guestToolsBundled": String(FileManager.default.fileExists(atPath: toolsURL.appendingPathComponent("TerminalMacGuest.app").path))])
+                           "guestToolsBundled": String(FileManager.default.fileExists(atPath: toolsURL.appendingPathComponent("TerminalMacGuest.app").path)),
+                           "userNetworkBundled": String(UserNetwork.isBundled(near: executableURL))])
         case "image":
             let args = try Arguments(tail, options: ["output"])
             guard args.positionals.isEmpty else { throw Failure("Usage: terminal-mac image [--output /path/to/restore.ipsw]") }
@@ -45,7 +47,8 @@ final class CLI {
             try FileManager.default.moveItem(at: temporary, to: destination)
             print(destination.path)
         case "create":
-            let args = try Arguments(tail, flags: ["offline", "standard"], options: ["ipsw", "cpus", "memory", "disk", "width", "height"])
+            let args = try Arguments(tail, flags: ["offline", "standard"], options: ["ipsw", "cpus", "memory", "disk", "width", "height", "network"])
+            if try VirtualMachines.networkMode(args) == "user", !UserNetwork.isBundled(near: executableURL) { throw Failure(UserNetwork.missing) }
             try await VirtualMachines.create(args, store: store)
         case "ls", "list":
             _ = try Arguments(tail)
@@ -65,6 +68,7 @@ final class CLI {
                 if !quietStartup { try printJSON(["name": name, "state": "already-running"]) }; return
             }
             guard FileManager.default.fileExists(atPath: toolsURL.appendingPathComponent("TerminalMacGuest.app").path) else { throw Failure("Guest tools are missing. Run scripts/build.sh and use dist/terminal-mac.") }
+            if machine.usesUserNetwork, !UserNetwork.isBundled(near: executableURL) { throw Failure(UserNetwork.missing) }
             let log = directory.appendingPathComponent("runtime.log")
             if !FileManager.default.fileExists(atPath: log.path) { FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
             let logHandle = try FileHandle(forWritingTo: log)
@@ -90,7 +94,7 @@ final class CLI {
             let name = try args.machineName()
             let machine = try store.load(name)
             guard machine.installed else { throw Failure("VM installation is incomplete") }
-            runtime = try MachineRuntime(machine: machine, directory: store.directory(name), tools: toolsURL)
+            runtime = try MachineRuntime(machine: machine, directory: store.directory(name), tools: toolsURL, gvproxy: gvproxyURL)
             try await runtime!.start(show: args.flags.contains("window"))
             // Keep the app event loop and runtime alive until guest shutdown.
             while true { try await Task.sleep(nanoseconds: 1_000_000_000) }
@@ -112,6 +116,17 @@ final class CLI {
             machine.scale = args.flags.contains("hidpi") ? 2 : 1
             try store.save(machine)
             try printJSON(["name": name, "display": "\(machine.width)×\(machine.height) points at \(machine.displayScale)x"])
+        case "network":
+            let args = try Arguments(tail, flags: ["nat", "user", "offline"])
+            let name = try args.machineName()
+            var machine = try store.load(name)
+            guard args.flags.count == 1 else { throw Failure("Usage: terminal-mac network [NAME] --nat|--user|--offline") }
+            guard !runtimeIsLocked(try store.directory(name)) else { throw Failure("Stop the VM first: terminal-mac stop \(name). The network mode applies at the next boot.") }
+            if args.flags.contains("user"), !UserNetwork.isBundled(near: executableURL) { throw Failure(UserNetwork.missing) }
+            machine.network = !args.flags.contains("offline")
+            machine.networkMode = args.flags.contains("user") ? "user" : nil
+            try store.save(machine)
+            try printJSON(["name": name, "network": machine.networkDescription])
         case "action": try await action(tail)
         case "mcp":
             let args = try Arguments(tail, flags: ["config"])
@@ -154,6 +169,7 @@ final class CLI {
             try GuestGuard.requireVirtualMac()
             if args.flags.contains("check") { print("virtual-mac"); return }
             if try await GuestBootstrap.installAndRelaunchIfNeeded() { return }
+            await GuestBootstrap.replaceRunningInstances()
             let exchange = URL(fileURLWithPath: args.options["exchange"] ?? "/Volumes/My Shared Files/control")
             guest = try GuestRuntime(exchange: exchange)
             guest!.start()
@@ -166,7 +182,7 @@ final class CLI {
     }
     func action(_ input: [String]) async throws {
         let args = try Arguments(input, flags: ["double"], options: ["x", "y", "x2", "y2", "dx", "dy", "text", "key", "button", "count", "output", "timeout"])
-        let actions: Set<String> = ["status", "screenshot", "snapshot", "click", "move", "drag", "scroll", "type", "key"]
+        let actions: Set<String> = ["status", "permissions", "screenshot", "snapshot", "click", "move", "drag", "scroll", "type", "key"]
         var positions = args.positionals
         let name: String
         if let first = positions.first, actions.contains(first) { name = "default" }
@@ -245,7 +261,10 @@ final class CLI {
     create [NAME] --ipsw PATH     Install a new virtual Mac (default name: default)
       [--cpus 4 --memory 4 --disk 64 --width 1280 --height 800 --offline]
       [--standard]                1x display; new VMs default to sharp 2x HiDPI
+      [--network nat|user]        user: built-in DHCP, DNS and NAT (gvproxy); works
+                                  where macOS NAT loses DNS under TUN-mode VPNs/proxies
     display [NAME] --hidpi|--standard  Switch a stopped VM between 2x and 1x
+    network [NAME] --nat|--user|--offline  Switch a stopped VM's networking
     start [NAME] [--window]       Boot in the background; show setup window if requested
     view [NAME] [--read-only]     Live terminal desktop (Ghostty, Kitty, iTerm2)
       [--protocol kitty|iterm]    Ctrl+G opens Mac shortcuts; Ctrl+] exits
@@ -256,6 +275,7 @@ final class CLI {
     doctor                      Check host support and bundled guest tools
 
     action [NAME] status
+    action [NAME] permissions   Reset the helper's privacy grants and prompt again
     action [NAME] screenshot [--output PATH]
     action [NAME] click X Y [--button right] [--double]
     action [NAME] move X Y
