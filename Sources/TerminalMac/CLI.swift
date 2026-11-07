@@ -154,6 +154,7 @@ final class CLI {
             try GuestGuard.requireVirtualMac()
             if args.flags.contains("check") { print("virtual-mac"); return }
             if try await GuestBootstrap.installAndRelaunchIfNeeded() { return }
+            await GuestBootstrap.replaceRunningInstances()
             let exchange = URL(fileURLWithPath: args.options["exchange"] ?? "/Volumes/My Shared Files/control")
             guest = try GuestRuntime(exchange: exchange)
             guest!.start()
@@ -166,7 +167,7 @@ final class CLI {
     }
     func action(_ input: [String]) async throws {
         let args = try Arguments(input, flags: ["double"], options: ["x", "y", "x2", "y2", "dx", "dy", "text", "key", "button", "count", "output", "timeout"])
-        let actions: Set<String> = ["status", "screenshot", "snapshot", "click", "move", "drag", "scroll", "type", "key"]
+        let actions: Set<String> = ["status", "permissions", "screenshot", "snapshot", "click", "move", "drag", "scroll", "type", "key"]
         var positions = args.positionals
         let name: String
         if let first = positions.first, actions.contains(first) { name = "default" }
@@ -256,6 +257,7 @@ final class CLI {
     doctor                      Check host support and bundled guest tools
 
     action [NAME] status
+    action [NAME] permissions   Reset the helper's privacy grants and prompt again
     action [NAME] screenshot [--output PATH]
     action [NAME] click X Y [--button right] [--double]
     action [NAME] move X Y

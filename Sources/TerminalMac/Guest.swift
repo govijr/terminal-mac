@@ -98,7 +98,22 @@ final class GuestRuntime: NSObject {
                 let bounds = CGDisplayBounds(CGMainDisplayID())
                 values = ["screenRecording": String(CGPreflightScreenCaptureAccess()), "accessibility": String(AXIsProcessTrusted()),
                           "width": String(Int(bounds.width)), "height": String(Int(bounds.height)),
-                          "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0"]
+                          "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0",
+                          // Build and pid show which helper answered, so an update or relaunch can be confirmed from the host.
+                          "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
+                          "bundlePath": Bundle.main.bundlePath, "pid": String(ProcessInfo.processInfo.processIdentifier)]
+            case "permissions":
+                // A helper signed with a new identity keeps its toggles in System Settings while the grants behind them
+                // are void, so drop the recorded grants and prompt again from this process. macOS 27 adds a second
+                // screen-capture prompt here that the Settings toggle alone never shows.
+                for service in ["Accessibility", "ScreenCapture"] {
+                    let reset = Process(); reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil"); reset.arguments = ["reset", service, "dev.terminal-mac.guest"]
+                    reset.standardOutput = FileHandle.nullDevice; reset.standardError = FileHandle.nullDevice
+                    try reset.run(); reset.waitUntilExit()
+                    guard reset.terminationStatus == 0 else { throw Failure("tccutil reset \(service) failed with status \(reset.terminationStatus)") }
+                }
+                let accessibility = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+                values = ["accessibility": String(accessibility), "screenRecording": String(CGRequestScreenCaptureAccess())]
             case "screenshot" where request.arguments["format"] == "bgra-lz4":
                 guard CGPreflightScreenCaptureAccess() else { throw Failure("Allow Screen Recording for TerminalMacGuest inside the VM, then reopen the helper if macOS requests it") }
                 try await desktop.prepare(maxWidth: number(request, "maxWidth", range: 16...7680), maxHeight: number(request, "maxHeight", range: 16...4320))
@@ -158,6 +173,7 @@ final class GuestRuntime: NSObject {
                 let dy = try number(request, "dy", range: -1000...1000)
                 let dx = Int(request.arguments["dx"] ?? "0") ?? 0
                 guard (-1000...1000).contains(dx), let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(dy), wheel2: Int32(dx), wheel3: 0) else { throw Failure("Invalid scroll") }
+                event.flags = []
                 event.post(tap: .cghidEventTap)
             case "type":
                 try requireAccessibility()
@@ -201,6 +217,8 @@ final class GuestRuntime: NSObject {
     }
     func postMouse(_ type: CGEventType, point: CGPoint, button: CGMouseButton, count: Int = 1) throws {
         guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button) else { throw Failure("Cannot create mouse event") }
+        // A plain click must not become cmd-click because a shortcut was pressed earlier.
+        event.flags = []
         event.setIntegerValueField(.mouseEventClickState, value: Int64(count))
         event.post(tap: .cghidEventTap)
     }

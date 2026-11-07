@@ -103,6 +103,8 @@ Complete macOS Setup Assistant in the VM window and create a guest account. Insi
 1. Open Finder → `/Volumes/My Shared Files/tools`.
 2. Open `TerminalMacGuest.app`. It installs itself to the guest's `~/Applications` and opens the installed copy.
 3. Use the helper's buttons to grant **Screen Recording** and **Accessibility** in the guest's System Settings. Reopen the helper if macOS asks. The host does not need either permission.
+
+If both toggles are on but `terminal-mac action NAME status` still reports `false`, for example after a helper signed with a different identity replaced the one that was approved, run `terminal-mac action NAME permissions`. It clears the stale grants inside the guest and prompts again.
 4. Keep the guest logged in and the helper running. It registers itself for guest login; approve that setting if macOS requests it.
 
 On the host:

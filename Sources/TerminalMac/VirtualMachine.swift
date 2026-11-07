@@ -84,17 +84,37 @@ enum VirtualMachines {
     }
     private static func install(_ original: Machine, at directory: URL, imageURL: URL, store: Store) async throws {
         var machine = original
+        stderr("Installing macOS into '\(machine.name)' (\(machine.cpu) CPUs, \(machine.memoryGiB) GiB RAM, \(machine.diskGiB) GiB sparse disk)…")
+        try await runInstaller(machine, at: directory, imageURL: imageURL)
+        machine.installed = true
+        try store.save(machine)
+        stderr("macOS is installed in '\(machine.name)'.")
+        try await waitForAuxiliaryStorage(of: machine, at: directory)
+    }
+    /// Scoped so the installer's VM is released as soon as the installation ends.
+    private static func runInstaller(_ machine: Machine, at directory: URL, imageURL: URL) async throws {
         let vm = VZVirtualMachine(configuration: try configuration(machine, at: directory, tools: nil))
         let installer = VZMacOSInstaller(virtualMachine: vm, restoringFromImageAt: imageURL)
-        stderr("Installing macOS into '\(machine.name)' (\(machine.cpu) CPUs, \(machine.memoryGiB) GiB RAM, \(machine.diskGiB) GiB sparse disk)…")
         let observation = installer.progress.observe(\.fractionCompleted, options: [.new]) { progress, _ in
             stderr(String(format: "Installation: %.0f%%", progress.fractionCompleted * 100))
         }
         defer { observation.invalidate() }
         try await installer.install()
-        machine.installed = true
-        try store.save(machine)
-        stderr("macOS is installed in '\(machine.name)'.")
+    }
+    /// Virtualization runs each VM in an XPC helper that keeps an exclusive flock on auxiliary.bin until the
+    /// VZVirtualMachine is torn down, which happens asynchronously after the installer returns. Booting the VM
+    /// from `up` before then fails with "Failed to lock auxiliary storage", so wait for the lock to go away.
+    private static func waitForAuxiliaryStorage(of machine: Machine, at directory: URL) async throws {
+        let path = directory.appendingPathComponent("auxiliary.bin").path
+        for _ in 0..<300 {
+            let fd = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
+            guard fd >= 0 else { throw Failure("Cannot open the VM's auxiliary storage") }
+            let free = flock(fd, LOCK_EX | LOCK_NB) == 0
+            close(fd)
+            if free { return }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        throw Failure("The installer still holds the VM's auxiliary storage. Boot it in a moment with: terminal-mac start \(machine.name)")
     }
 }
 
