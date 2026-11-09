@@ -59,9 +59,15 @@ public struct Machine: Codable {
     /// 2 renders the guest at Retina density: twice the pixels for the same point size. Older VMs have none.
     public var scale: Int?
     public var displayScale: Int { scale == 2 ? 2 : 1 }
-    public init(name: String, cpu: Int, memoryGiB: Int, diskGiB: Int, width: Int = 1280, height: Int = 800, network: Bool = true, installed: Bool = false, scale: Int? = nil) {
+    /// "user" runs the guest network through the bundled gvproxy (DHCP, DNS and NAT in user space); nil or "nat"
+    /// uses macOS NAT, which some VPN and proxy apps in TUN mode leave without working DNS.
+    public var networkMode: String?
+    public var usesUserNetwork: Bool { network && networkMode == "user" }
+    public var networkDescription: String { !network ? "offline" : usesUserNetwork ? "user" : "nat" }
+    public init(name: String, cpu: Int, memoryGiB: Int, diskGiB: Int, width: Int = 1280, height: Int = 800, network: Bool = true, installed: Bool = false, scale: Int? = nil, networkMode: String? = nil) {
         self.name = name; self.cpu = cpu; self.memoryGiB = memoryGiB; self.diskGiB = diskGiB
         self.width = width; self.height = height; self.network = network; self.installed = installed; self.scale = scale
+        self.networkMode = networkMode
     }
 }
 

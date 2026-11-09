@@ -4,7 +4,7 @@ import TerminalMacCore
 
 extension CLI {
     func up(_ input: [String]) async throws {
-        let args = try Arguments(input, flags: ["plan", "no-view", "detach", "offline"], options: ["ipsw", "cpus", "memory", "disk", "width", "height", "timeout", "protocol"])
+        let args = try Arguments(input, flags: ["plan", "no-view", "detach", "offline"], options: ["ipsw", "cpus", "memory", "disk", "width", "height", "timeout", "protocol", "network"])
         let name = try args.machineName()
         let directory = try store.directory(name)
         let existing = FileManager.default.fileExists(atPath: directory.appendingPathComponent("machine.json").path) ? try store.load(name) : nil
@@ -24,6 +24,7 @@ extension CLI {
         _ = try args.integer("width", default: 1280, range: 800...3840)
         _ = try args.integer("height", default: 800, range: 600...2160)
         if let graphics = args.options["protocol"], !["kitty", "iterm"].contains(graphics) { throw Failure("--protocol must be kitty or iterm") }
+        if try VirtualMachines.networkMode(args) == "user", !UserNetwork.isBundled(near: executableURL) { throw Failure(UserNetwork.missing) }
         try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         var setupLock: FileLock? = try FileLock(store.root.appendingPathComponent("setup-\(name).lock"))
         defer { withExtendedLifetime(setupLock) {} }
@@ -35,12 +36,12 @@ extension CLI {
             if let local = args.options["ipsw"] { image = URL(fileURLWithPath: (local as NSString).expandingTildeInPath) }
             else { image = try await cachedRestoreImage() }
             var createInput = [name, "--ipsw", image.path]
-            for key in ["cpus", "memory", "disk", "width", "height"] {
+            for key in ["cpus", "memory", "disk", "width", "height", "network"] {
                 if let value = args.options[key] { createInput += ["--\(key)", value] }
             }
             if args.flags.contains("offline") { createInput += ["--offline"] }
-            try await VirtualMachines.create(Arguments(createInput, flags: ["offline"], options: ["ipsw", "cpus", "memory", "disk", "width", "height"]), store: store, retryIncomplete: true)
-        } else if !Set(args.options.keys).intersection(["ipsw", "cpus", "memory", "disk", "width", "height"]).isEmpty || args.flags.contains("offline") {
+            try await VirtualMachines.create(Arguments(createInput, flags: ["offline"], options: ["ipsw", "cpus", "memory", "disk", "width", "height", "network"]), store: store, retryIncomplete: true)
+        } else if !Set(args.options.keys).intersection(["ipsw", "cpus", "memory", "disk", "width", "height", "network"]).isEmpty || args.flags.contains("offline") {
             throw Failure("This VM already exists. Creation options only apply to a new VM; run terminal-mac up \(name) without them.")
         }
         try await run(["start", name], quietStartup: true)
@@ -71,6 +72,7 @@ extension CLI {
               2. Open Finder → /Volumes/My Shared Files/tools → TerminalMacGuest.app.
                  It installs itself in the guest and registers for future guest logins.
               3. Use its two buttons to allow Screen Recording and Accessibility.
+                 Afterwards it stays as an icon in the guest's menu bar.
             Waiting for the virtual Mac to be ready. You can rerun this command later.
             """)
         }

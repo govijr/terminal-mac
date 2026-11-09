@@ -24,12 +24,8 @@ enum GuestBootstrap {
         if !exists || needsUpdate {
             let running = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.terminal-mac.guest")
                 .filter { $0.bundleURL?.resolvingSymlinksInPath() == destination.resolvingSymlinksInPath() }
-            for application in running { _ = application.terminate() }
-            for _ in 0..<60 {
-                if running.allSatisfy({ $0.isTerminated }) { break }
-                try await Task.sleep(nanoseconds: 50_000_000)
-            }
-            guard running.allSatisfy({ $0.isTerminated }) else { throw Failure("Quit the installed guest helper, then reopen this copy to update it") }
+            await terminate(running)
+            guard running.allSatisfy({ hasExited($0) }) else { throw Failure("Quit the installed guest helper, then reopen this copy to update it") }
             let staging = applications.appendingPathComponent(".TerminalMacGuest-\(UUID().uuidString).app")
             defer { try? FileManager.default.removeItem(at: staging) }
             try FileManager.default.copyItem(at: source, to: staging)
@@ -43,10 +39,54 @@ enum GuestBootstrap {
             }
             if exists { try? FileManager.default.removeItem(at: backup) }
         }
+        // The launched copy replaces any installed helper that is already running (see replaceRunningInstances):
+        // two helpers answer every mailbox request twice, so each key press would type two characters.
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         _ = try await NSWorkspace.shared.openApplication(at: destination, configuration: configuration)
         return true
+    }
+    /// Running helpers launched from `bundle`, other than this process.
+    static func runningInstalledHelpers(at bundle: URL) -> [NSRunningApplication] {
+        let location = bundle.resolvingSymlinksInPath()
+        return NSRunningApplication.runningApplications(withBundleIdentifier: "dev.terminal-mac.guest").filter {
+            $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && !hasExited($0)
+                && $0.bundleURL?.resolvingSymlinksInPath() == location
+        }
+    }
+    /// The installed helper is single-instance, and the newest launch wins: reopening it is how macOS asks users to
+    /// pick up a fresh Screen Recording grant, and the helper has no menu bar, so Cmd+Q cannot quit the old one.
+    static func replaceRunningInstances() async {
+        guard Bundle.main.bundleIdentifier == "dev.terminal-mac.guest" else { return }
+        let twins = runningInstalledHelpers(at: Bundle.main.bundleURL)
+        guard !twins.isEmpty else { return }
+        await terminate(twins)
+    }
+    /// `NSRunningApplication.isTerminated` only updates when this process's run loop observes the exit, which
+    /// the setup flow cannot rely on, so the kernel is asked directly whether the process still exists.
+    static func hasExited(_ application: NSRunningApplication) -> Bool {
+        kill(application.processIdentifier, 0) != 0 && errno == ESRCH
+    }
+    /// Asks the helpers to quit, then kills any that are still around after ten seconds; they hold no unsaved state.
+    static func terminate(_ applications: [NSRunningApplication]) async {
+        for application in applications { _ = application.terminate() }
+        for _ in 0..<200 {
+            if applications.allSatisfy({ hasExited($0) }) { return }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        for application in applications where !hasExited(application) { kill(application.processIdentifier, SIGKILL) }
+        for _ in 0..<60 {
+            if applications.allSatisfy({ hasExited($0) }) { return }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+    /// Reads a bundle's version without `Bundle(url:)`, whose per-URL cache keeps returning the Info.plist it saw first.
+    static func bundleVersion(at bundle: URL) -> Int? {
+        let plist = bundle.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: plist),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let version = info["CFBundleVersion"] as? String else { return nil }
+        return Int(version)
     }
     /// The installed helper hands over to a newer copy in the shared tools folder, which installs
     /// itself over this one and relaunches. Rebuilding terminal-mac on the host is enough to update the guest.
@@ -54,7 +94,7 @@ enum GuestBootstrap {
         guard Bundle.main.bundleIdentifier == "dev.terminal-mac.guest" else { return }
         let shared = tools.appendingPathComponent("TerminalMacGuest.app")
         guard Bundle.main.bundleURL.resolvingSymlinksInPath() != shared.resolvingSymlinksInPath(),
-              let available = Bundle(url: shared)?.object(forInfoDictionaryKey: "CFBundleVersion") as? String, let newer = Int(available),
+              let newer = bundleVersion(at: shared),
               let running = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""), newer > running else { return }
         do { try CodeIdentity().validate(shared) }
         catch { stderr("Guest helper update refused: \(error.localizedDescription)"); return }
