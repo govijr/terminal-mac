@@ -4,6 +4,7 @@ import Darwin
 import Foundation
 import ImageIO
 import TerminalUI
+import TerminalMacCore
 import UniformTypeIdentifiers
 
 enum DesktopTransport: String {
@@ -103,15 +104,14 @@ final class DesktopRenderer: @unchecked Sendable {
     private func decode(_ frame: DesktopFrame) -> CGImage? {
         switch frame {
         case .pixels(let compressed, let width, let height, let bytesPerRow):
-            guard let pixels = try? (compressed as NSData).decompressed(using: .lz4) as Data,
+            guard let pixels = try? FrameDecoder.pixels(compressed, width: width, height: height, bytesPerRow: bytesPerRow),
                   bytesPerRow >= width * 4, pixels.count == bytesPerRow * height,
                   let provider = CGDataProvider(data: pixels as CFData) else { return nil }
             return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bytesPerRow, space: colorSpace,
                            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
                            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
         case .encoded(let data):
-            guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-            return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+            return FrameDecoder.image(data)
         }
     }
 

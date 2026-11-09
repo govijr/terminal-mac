@@ -129,7 +129,7 @@ final class AgentServer {
         defer { mailbox.remove(imageName) }
         let reply = try await guest(request, mailbox: mailbox)
         guard reply.values["image"] == imageName, let png = try mailbox.read(imageName, limit: 64 * 1024 * 1024),
-              let source = CGImageSourceCreateWithData(png as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+              let image = FrameDecoder.image(png) else {
             throw Failure("The guest helper returned an invalid screenshot")
         }
         let jpeg = NSMutableData()
