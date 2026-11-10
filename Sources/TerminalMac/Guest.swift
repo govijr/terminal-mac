@@ -226,22 +226,14 @@ final class GuestRuntime: NSObject {
                 try requireAccessibility()
                 guard let text = request.arguments["text"], text.utf8.count <= 32768 else { throw Failure("Provide text (maximum 32 KiB)") }
                 // Unicode events avoid modifying the guest or host clipboard.
-                var chunk: [UniChar] = []
-                func send() throws {
-                    guard !chunk.isEmpty else { return }
+                for chunk in UnicodeText.chunks(text) {
                     guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
                           let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { throw Failure("Cannot create keyboard event") }
                     // Literal text must not inherit modifiers from a preceding shortcut.
                     down.flags = []; up.flags = []
                     chunk.withUnsafeBufferPointer { ptr in down.keyboardSetUnicodeString(stringLength: ptr.count, unicodeString: ptr.baseAddress!) }
-                    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap); chunk.removeAll(keepingCapacity: true)
+                    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
                 }
-                for character in text {
-                    let units = Array(String(character).utf16)
-                    if chunk.count + units.count > 16 { try send() }
-                    chunk += units
-                }
-                try send()
             case "key":
                 try requireAccessibility()
                 try press(request.arguments["key"] ?? "")
