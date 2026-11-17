@@ -36,6 +36,15 @@ terminal-mac action NAME scroll --dy -300 --x X --y Y
 
 Text is sent as Unicode keyboard events, not through the clipboard. No shell-execution action exists.
 
+## Getting a host app or files into the guest
+
+The guest cannot see the user's Mac, except for one optional read-only folder the user can share. `terminal-mac status NAME` reports it as `share` (`none` when off).
+
+- With a share, the guest sees the folder at `/Volumes/My Shared Files/shared`. Open it in the guest's Finder (`cmd+shift+g`, then type the path), or in the guest's Terminal.
+- The share is read-only, so copy an app out before running it, for example in the guest's Terminal: `cp -R "/Volumes/My Shared Files/shared/MyApp.app" ~/Applications/`.
+- To set or change it, the VM must be stopped: `terminal-mac share NAME /absolute/path` (`--none` removes it), then `terminal-mac start NAME`. A new VM can take `create NAME --share /absolute/path`. Do this only when the user asks, and share a folder that holds only what the guest needs, never the home folder.
+- If `start` fails because the shared folder no longer exists, tell the user. They can restore it or change the share.
+
 ## When to stop and ask the user
 
 - The guest is at its login screen, or the helper is not running (tools report "no logged-in session"): ask the user to sign in, for example `terminal-mac view NAME` then Ctrl+O. Automatic login in the guest avoids this on later boots.
