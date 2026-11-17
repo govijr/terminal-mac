@@ -41,6 +41,9 @@ No macOS restore image was found in the user's Downloads/Desktop during a target
 - While typing in a host app, have an agent type/click in the guest; verify host focus, pointer and clipboard stay unchanged.
 - Test live viewing in Ghostty, Kitty and iTerm2, including window resize, Unicode, arrows, click/scroll, Ctrl+], terminal close and signal cleanup.
 - Hide the VM window, continue guest control, then show it again.
+- Close the native VM window with its red close button, then click the running host app's Dock icon.
+  The same VM window should reappear without restarting the guest or changing its PID. Repeat after
+  `terminal-mac hide NAME`, and confirm reopening an already visible window brings it to the front.
 - Pause/resume and graceful shutdown; confirm helper timeouts while paused or unavailable.
 - Verify forced stop and a fresh boot without disk corruption after a deliberately disposable run.
 - Verify the guest sees only the two documented shares; verify offline configuration has no guest NIC.

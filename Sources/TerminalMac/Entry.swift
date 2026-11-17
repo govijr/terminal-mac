@@ -15,6 +15,8 @@ struct Entry {
         let needsApplication = command == "__run" || guestMode
         if needsApplication { NSApplication.shared.setActivationPolicy(.accessory) }
         let cli = CLI()
+        let applicationDelegate = command == "__run" ? VMApplicationDelegate { cli.runtime?.showWindow() } : nil
+        if let applicationDelegate { NSApplication.shared.delegate = applicationDelegate }
         Task { @MainActor in
             do { try await cli.run(Array(CommandLine.arguments.dropFirst())); exit(0) }
             catch {
@@ -26,7 +28,7 @@ struct Entry {
                 exit(1)
             }
         }
-        if needsApplication { NSApplication.shared.run() }
+        if needsApplication { withExtendedLifetime(applicationDelegate) { NSApplication.shared.run() } }
         else { CFRunLoopRun() }
     }
 }
