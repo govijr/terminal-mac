@@ -169,6 +169,17 @@ scripts/build.sh                                      # bundles it into Terminal
 
 In user mode the guest is 192.168.127.2 with gateway and DNS at 192.168.127.1; the host answers at 192.168.127.254 (`host.containers.internal`). gvproxy runs as a child of the VM's background process, logs to `runtime.log` and exits with it. `terminal-mac doctor` reports whether gvproxy is bundled; `status` reports the mode in use.
 
+### Sharing a host folder
+
+To get apps and files into the guest, share one host folder read-only. It is off by default.
+
+```sh
+./dist/terminal-mac create default --ipsw … --share /Users/me/builds
+./dist/terminal-mac share default /Users/me/builds   # or change a stopped VM; --none removes it
+```
+
+The guest sees the folder at `/Volumes/My Shared Files/shared` and cannot write to it. Copy an app out before running it, for example `cp -R "/Volumes/My Shared Files/shared/MyApp.app" ~/Applications/`. The path must be an absolute path to an existing directory; `/` and your home folder itself are refused, also through symlinks. The folder is checked again at every boot, and `start` fails if it no longer exists. `status` reports the configured share.
+
 VM data lives in `~/Library/Application Support/terminal-mac/machines/NAME/`. `TERMINAL_MAC_HOME` overrides the data root. Each VM has an exclusive file lock, a sparse disk, hardware identity, auxiliary boot storage, `machine.json`, a private host-control mailbox, the guest exchange directory, and `runtime.log`. A VM boot runs as a separate background process. Lifecycle commands must use the same `TERMINAL_MAC_HOME` as the process that started it.
 
 An interrupted or failed installation leaves its directory and `installed: false` for diagnosis. It is never silently overwritten. To retry, ensure no installer/VM is running, move that incomplete directory aside, then create the VM again. There is deliberately no destructive VM-delete command yet.
@@ -176,7 +187,8 @@ An interrupted or failed installation leaves its directory and `installed: false
 ## Isolation model
 
 - Host input and screen APIs are not used for agent actions. The helper refuses to run unless `hw.model` starts with `VirtualMac`. That check prevents accidental host execution; it is not hardware attestation or a defense against a compromised host.
-- The guest sees two explicit shares: `control` (read/write, containing request/reply JSON and screenshots) and `tools` (read-only helper app). Host home, project folders, clipboard, microphone, and camera are not attached.
+- By default the guest sees two explicit shares: `control` (read/write, containing request/reply JSON and screenshots) and `tools` (read-only helper app). Host home, project folders, clipboard, microphone, and camera are not attached.
+- Opt-in: `--share PATH` or `terminal-mac share NAME PATH` adds one host folder as a third, read-only share named `shared`. Everything in that folder becomes readable by the guest. `/` and the host home folder itself are refused; choose a folder that holds only what the guest needs.
 - There is no remote-control network listener. The flat mailbox pins its directory, rejects symlinks, hardlinks and nonregular files on reads, bounds message sizes, checks request IDs, and expires pending actions. The host never executes guest-provided content.
 - Default NAT networking permits guest internet access and may reach services on the host or local network. This is **not** a network-isolated or hardened hostile-code environment. `--offline` removes that network path.
 - A logged-out/locked guest, missing helper, denied guest permissions, or paused VM prevents normal computer use. TCC grants require interactive guest setup and cannot be bypassed by the CLI.
@@ -193,7 +205,7 @@ swift test --disable-sandbox --scratch-path /tmp/terminal-mac-build \
   --config-path /tmp/terminal-mac-config --security-path /tmp/terminal-mac-security
 ```
 
-Tests cover mailbox round trips, expiry and cleanup, file-boundary defenses, name/option validation, fragmented UTF-8 and terminal input sequences. These are automated protocol checks, not evidence that a guest was installed, booted, granted permissions, or controlled successfully. See [docs/VALIDATION.md](docs/VALIDATION.md) for recorded results and the live checklist.
+Tests cover mailbox round trips, expiry and cleanup, file-boundary defenses, name/option and shared-folder validation, older `machine.json` decoding, fragmented UTF-8 and terminal input sequences. These are automated protocol checks, not evidence that a guest was installed, booted, granted permissions, or controlled successfully. See [docs/VALIDATION.md](docs/VALIDATION.md) for recorded results and the live checklist.
 
 References: [terminal-browser](https://terminal-browser.com/), [Apple's macOS virtualization sample](https://developer.apple.com/documentation/virtualization/running-macos-in-a-virtual-machine-on-apple-silicon), [VZVirtualMachineView](https://developer.apple.com/documentation/virtualization/vzvirtualmachineview), [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit).
 

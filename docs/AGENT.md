@@ -33,4 +33,6 @@ All replies are JSON; failures exit nonzero. Use normal safe shell quoting for l
 
 Do not run the `guest` subcommand on the host. Do not use host screenshot or event-posting tools as a fallback. Apps, files and authenticated sessions inside the VM are separate from the user's physical Mac. Request user help for guest login, privacy permission prompts, or missing credentials.
 
-`hide` and exiting `view` leave the VM running. `stop` requests shutdown. `stop --force` can lose guest work and should be used only when a normal shutdown cannot complete. This release candidate has no reset, clone, rollback, file import, or delete command.
+`hide` and exiting `view` leave the VM running. `stop` requests shutdown. `stop --force` can lose guest work and should be used only when a normal shutdown cannot complete. This release candidate has no reset, clone, rollback, or delete command.
+
+To get host files or apps into the guest, the user can configure one read-only shared folder on a stopped VM with `terminal-mac share NAME /absolute/path` (or `create NAME --share /absolute/path`; `--none` removes it). After the next boot the guest sees it at `/Volumes/My Shared Files/shared`. `terminal-mac status NAME` reports it. The guest cannot write to it, so copy files out before changing them, for example `cp -R "/Volumes/My Shared Files/shared/MyApp.app" ~/Applications/`. Do not configure a share yourself unless the user asks for it.

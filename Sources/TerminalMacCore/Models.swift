@@ -47,6 +47,24 @@ public func validateName(_ name: String) throws {
     }
 }
 
+/// Checks a host folder to share read-only with the guest and returns its canonical path.
+/// `/` and the home folder itself are refused, even through symlinks: sharing either exposes the whole host.
+public func validateSharedFolder(_ path: String, home: String = FileManager.default.homeDirectoryForCurrentUser.path) throws -> String {
+    guard path.hasPrefix("/") else { throw Failure("The shared folder must be an absolute path: \(path)") }
+    var isDirectory: ObjCBool = false
+    guard let resolved = canonicalPath(path), FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory), isDirectory.boolValue else {
+        throw Failure("The shared folder does not exist or is not a directory: \(path)")
+    }
+    guard resolved != "/", resolved != canonicalPath(home) else {
+        throw Failure("Refusing to share \(resolved): sharing / or your home folder exposes your whole Mac to the guest. Share a specific subfolder instead")
+    }
+    return resolved
+}
+
+private func canonicalPath(_ path: String) -> String? {
+    realpath(path, nil).map { pointer in defer { free(pointer) }; return String(cString: pointer) }
+}
+
 public struct Machine: Codable {
     public var name: String
     public var cpu: Int
@@ -64,10 +82,12 @@ public struct Machine: Codable {
     public var networkMode: String?
     public var usesUserNetwork: Bool { network && networkMode == "user" }
     public var networkDescription: String { !network ? "offline" : usesUserNetwork ? "user" : "nat" }
-    public init(name: String, cpu: Int, memoryGiB: Int, diskGiB: Int, width: Int = 1280, height: Int = 800, network: Bool = true, installed: Bool = false, scale: Int? = nil, networkMode: String? = nil) {
+    /// Canonical host folder shared read-only as `/Volumes/My Shared Files/shared`. Nil, the default, shares nothing.
+    public var sharedFolder: String?
+    public init(name: String, cpu: Int, memoryGiB: Int, diskGiB: Int, width: Int = 1280, height: Int = 800, network: Bool = true, installed: Bool = false, scale: Int? = nil, networkMode: String? = nil, sharedFolder: String? = nil) {
         self.name = name; self.cpu = cpu; self.memoryGiB = memoryGiB; self.diskGiB = diskGiB
         self.width = width; self.height = height; self.network = network; self.installed = installed; self.scale = scale
-        self.networkMode = networkMode
+        self.networkMode = networkMode; self.sharedFolder = sharedFolder
     }
 }
 
