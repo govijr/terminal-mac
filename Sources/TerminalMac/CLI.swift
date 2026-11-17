@@ -47,7 +47,7 @@ final class CLI {
             try FileManager.default.moveItem(at: temporary, to: destination)
             print(destination.path)
         case "create":
-            let args = try Arguments(tail, flags: ["offline", "standard"], options: ["ipsw", "cpus", "memory", "disk", "width", "height", "network"])
+            let args = try Arguments(tail, flags: ["offline", "standard"], options: ["ipsw", "cpus", "memory", "disk", "width", "height", "network", "share"])
             if try VirtualMachines.networkMode(args) == "user", !UserNetwork.isBundled(near: executableURL) { throw Failure(UserNetwork.missing) }
             try await VirtualMachines.create(args, store: store)
         case "ls", "list":
@@ -69,6 +69,7 @@ final class CLI {
             }
             guard FileManager.default.fileExists(atPath: toolsURL.appendingPathComponent("TerminalMacGuest.app").path) else { throw Failure("Guest tools are missing. Run scripts/build.sh and use dist/terminal-mac.") }
             if machine.usesUserNetwork, !UserNetwork.isBundled(near: executableURL) { throw Failure(UserNetwork.missing) }
+            _ = try VirtualMachines.sharedFolder(of: machine)
             let log = directory.appendingPathComponent("runtime.log")
             if !FileManager.default.fileExists(atPath: log.path) { FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
             let logHandle = try FileHandle(forWritingTo: log)
@@ -101,9 +102,9 @@ final class CLI {
         case "status", "show", "hide", "pause", "resume", "stop":
             let args = try Arguments(tail, flags: command == "stop" ? ["force"] : [])
             let name = try args.machineName()
-            _ = try store.load(name)
+            let machine = try store.load(name)
             if command == "status", !runtimeIsLocked(try store.directory(name)) {
-                try printJSON(["name": name, "state": "stopped"]); return
+                try printJSON(["name": name, "state": "stopped", "share": machine.sharedFolder ?? "none"]); return
             }
             let reply = try await host(name, action: command, arguments: ["force": String(args.flags.contains("force"))])
             try printJSON(reply.values)
@@ -127,6 +128,17 @@ final class CLI {
             machine.networkMode = args.flags.contains("user") ? "user" : nil
             try store.save(machine)
             try printJSON(["name": name, "network": machine.networkDescription])
+        case "share":
+            let args = try Arguments(tail, flags: ["none"])
+            var positionals = args.positionals
+            let path = positionals.last?.hasPrefix("/") == true ? positionals.popLast() : nil
+            guard args.flags.contains("none") != (path != nil), positionals.count <= 1 else { throw Failure("Usage: terminal-mac share [NAME] /absolute/path|--none") }
+            let name = positionals.first ?? "default"
+            var machine = try store.load(name)
+            guard !runtimeIsLocked(try store.directory(name)) else { throw Failure("Stop the VM first: terminal-mac stop \(name). The shared folder applies at the next boot.") }
+            machine.sharedFolder = try path.map { try validateSharedFolder($0) }
+            try store.save(machine)
+            try printJSON(["name": name, "share": machine.sharedFolder ?? "none"])
         case "action": try await action(tail)
         case "mcp":
             let args = try Arguments(tail, flags: ["config"])
@@ -263,8 +275,11 @@ final class CLI {
       [--standard]                1x display; new VMs default to sharp 2x HiDPI
       [--network nat|user]        user: built-in DHCP, DNS and NAT (gvproxy); works
                                   where macOS NAT loses DNS under TUN-mode VPNs/proxies
+      [--share PATH]              Share a host folder read-only; the guest sees it at
+                                  /Volumes/My Shared Files/shared (not / or your home)
     display [NAME] --hidpi|--standard  Switch a stopped VM between 2x and 1x
     network [NAME] --nat|--user|--offline  Switch a stopped VM's networking
+    share [NAME] PATH|--none      Change or remove a stopped VM's read-only shared folder
     start [NAME] [--window]       Boot in the background; show setup window if requested
     view [NAME] [--read-only]     Live terminal desktop (Ghostty, Kitty, iTerm2)
       [--protocol kitty|iterm]    Ctrl+G opens Mac shortcuts; Ctrl+] exits

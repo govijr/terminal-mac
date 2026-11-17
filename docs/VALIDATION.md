@@ -44,6 +44,7 @@ No macOS restore image was found in the user's Downloads/Desktop during a target
 - Pause/resume and graceful shutdown; confirm helper timeouts while paused or unavailable.
 - Verify forced stop and a fresh boot without disk corruption after a deliberately disposable run.
 - Verify the guest sees only the two documented shares; verify offline configuration has no guest NIC.
+- With `share NAME /absolute/path` set, verify the guest sees the folder at `/Volumes/My Shared Files/shared`, can copy an app out and run it, and cannot write to the share. Remove the folder on the host and verify `start` refuses with a clear message.
 - Rebuild/reinstall the helper and check privacy permission behavior under ad-hoc and stable signing.
 
 No inline-terminal rendering, guest privacy grant, guest screenshot or guest input behavior should be described as live-verified until these checks are performed.
