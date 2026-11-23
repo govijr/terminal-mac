@@ -58,7 +58,7 @@ final class CLI {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             print(String(decoding: try encoder.encode(machines), as: UTF8.self))
         case "start":
-            let args = try Arguments(tail, flags: ["window"])
+            let args = try Arguments(tail, flags: ["window", "recovery"])
             let name = try args.machineName()
             let machine = try store.load(name)
             guard machine.installed else { throw Failure("Installation did not complete. See the VM directory and README recovery instructions.") }
@@ -76,7 +76,9 @@ final class CLI {
             defer { try? logHandle.close() }
             let process = Process()
             process.executableURL = executableURL
-            process.arguments = ["__run", name] + (args.flags.contains("window") ? ["--window"] : [])
+            process.arguments = ["__run", name]
+                + (args.flags.contains("window") ? ["--window"] : [])
+                + (args.flags.contains("recovery") ? ["--recovery"] : [])
             var environment = ProcessInfo.processInfo.environment; environment["TERMINAL_MAC_HOME"] = store.root.path
             process.environment = environment
             process.standardOutput = logHandle; process.standardError = logHandle; process.standardInput = FileHandle.nullDevice
@@ -90,11 +92,12 @@ final class CLI {
                 throw Failure("VM did not become ready: \(error.localizedDescription). Details: \(log.path)")
             }
         case "__run":
-            let args = try Arguments(tail, flags: ["window"])
+            let args = try Arguments(tail, flags: ["window", "recovery"])
             let name = try args.machineName()
             let machine = try store.load(name)
             guard machine.installed else { throw Failure("VM installation is incomplete") }
-            runtime = try MachineRuntime(machine: machine, directory: store.directory(name), tools: toolsURL, gvproxy: gvproxyURL)
+            runtime = try MachineRuntime(machine: machine, directory: store.directory(name), tools: toolsURL, gvproxy: gvproxyURL,
+                                         recovery: args.flags.contains("recovery"))
             try await runtime!.start(show: args.flags.contains("window"))
             // Keep the app event loop and runtime alive until guest shutdown.
             while true { try await Task.sleep(nanoseconds: 1_000_000_000) }
@@ -169,6 +172,9 @@ final class CLI {
             try GuestGuard.requireVirtualMac()
             if args.flags.contains("check") { print("virtual-mac"); return }
             if try await GuestBootstrap.installAndRelaunchIfNeeded() { return }
+            // Only the installed helper reaches this point; make the singleton deterministic
+            // across login-item and session-restoration double-launch before touching the mailbox.
+            try await GuestBootstrap.acquireSingleInstanceLock()
             await GuestBootstrap.replaceRunningInstances()
             let exchange = URL(fileURLWithPath: args.options["exchange"] ?? "/Volumes/My Shared Files/control")
             guest = try GuestRuntime(exchange: exchange)
@@ -266,6 +272,8 @@ final class CLI {
     display [NAME] --hidpi|--standard  Switch a stopped VM between 2x and 1x
     network [NAME] --nat|--user|--offline  Switch a stopped VM's networking
     start [NAME] [--window]       Boot in the background; show setup window if requested
+      [--recovery]                Boot from the macOS Recovery partition instead of
+                                  the normal system (no guest helper; for tasks like csrutil)
     view [NAME] [--read-only]     Live terminal desktop (Ghostty, Kitty, iTerm2)
       [--protocol kitty|iterm]    Ctrl+G opens Mac shortcuts; Ctrl+] exits
     show|hide [NAME]             Show or hide the native VM window

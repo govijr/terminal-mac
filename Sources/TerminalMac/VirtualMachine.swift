@@ -142,13 +142,18 @@ final class MachineRuntime: NSObject, VZVirtualMachineDelegate, NSWindowDelegate
     let mailbox: Mailbox
     let lock: Int32
     let userNetwork: UserNetwork?
+    /// Boot from the macOS Recovery partition instead of the normal system (`start --recovery`).
+    /// The guest helper does not run in Recovery: agent actions are unavailable there, and the
+    /// lifecycle mailbox (status/stop, including `--force`) still works.
+    let recovery: Bool
     var window: NSWindow?
     var loop: Task<Void, Never>?
     var stopping = false
     var stopDeadline: Date?
 
-    init(machine: Machine, directory: URL, tools: URL, gvproxy: URL) throws {
+    init(machine: Machine, directory: URL, tools: URL, gvproxy: URL, recovery: Bool = false) throws {
         self.machine = machine
+        self.recovery = recovery
         lock = open(directory.appendingPathComponent("runtime.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard lock >= 0 else { throw Failure("Cannot open VM lock") }
         guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { close(lock); throw Failure("VM is already running") }
@@ -161,8 +166,15 @@ final class MachineRuntime: NSObject, VZVirtualMachineDelegate, NSWindowDelegate
     deinit { close(lock) }
     func start(show: Bool) async throws {
         if show { showWindow() }
-        try await vm.start()
-        stderr("VM '\(machine.name)' is running (PID \(getpid())).")
+        if recovery {
+            let options = VZMacOSVirtualMachineStartOptions()
+            options.startUpFromMacOSRecovery = true
+            try await vm.start(options: options)
+            stderr("VM '\(machine.name)' is running in macOS Recovery (PID \(getpid())). No guest helper; agent actions are unavailable.")
+        } else {
+            try await vm.start()
+            stderr("VM '\(machine.name)' is running (PID \(getpid())).")
+        }
         loop = Task { @MainActor [weak self] in
             while let self, !Task.isCancelled {
                 do { for request in try mailbox.requests() { await handle(request) } }
@@ -195,7 +207,7 @@ final class MachineRuntime: NSObject, VZVirtualMachineDelegate, NSWindowDelegate
         do {
             var values: [String: String] = [:]
             switch request.action {
-            case "status": values = ["name": machine.name, "state": stateName, "pid": String(getpid()), "network": machine.networkDescription]
+            case "status": values = ["name": machine.name, "state": stateName, "pid": String(getpid()), "network": machine.networkDescription, "mode": recovery ? "recovery" : "normal"]
             case "show": showWindow()
             case "hide":
                 // Hiding the app hands focus back to whatever was in front before, usually the terminal.

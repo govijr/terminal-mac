@@ -1,9 +1,50 @@
 import AppKit
+import Darwin
 import ServiceManagement
 import TerminalMacCore
 
 @MainActor
 enum GuestBootstrap {
+    /// Kernel-level single-instance fence for the installed guest helper.
+    ///
+    /// Helpers can start twice in the same login: the SMAppService login item and macOS session
+    /// restoration launch copies milliseconds-to-seconds apart, and the self-update path launches a
+    /// copy from the shared-tools path. The existing `replaceRunningInstances` deduplicates only
+    /// same-path twins and races at startup, so duplicate helpers survive and double-answer the
+    /// mailbox (every key press types twice).
+    ///
+    /// Called after `installAndRelaunchIfNeeded`, so only the installed copy at
+    /// `~/Applications/TerminalMacGuest.app` ever holds this lock; the shared-tools updater exits
+    /// before reaching it. An instance that cannot acquire the lock within `timeout` exits quietly:
+    /// its launch source fired once, so it will not be restarted.
+    ///
+    /// The retry window covers the self-update handoff, where the previous holder is terminated
+    /// (graceful wait ~10s, then SIGKILL) before this copy needs to win the lock.
+    static func acquireSingleInstanceLock(timeout: TimeInterval = 15) async throws {
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/TerminalMacGuest")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let path = directory.appendingPathComponent("helper.lock").path
+        let fd = open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw Failure("Cannot open helper singleton lock: \(String(cString: strerror(errno)))") }
+        let deadline = Date().addingTimeInterval(timeout)
+        while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK else {
+                close(fd)
+                throw Failure("Cannot lock helper singleton: \(String(cString: strerror(errno)))")
+            }
+            guard Date() < deadline else {
+                close(fd)
+                stderr("Another guest helper already holds the singleton lock; exiting.")
+                exit(0)
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        // The descriptor is deliberately never closed: the kernel holds the flock for this
+        // process's lifetime and releases it on exit, however the helper terminates.
+    }
+
     static func installAndRelaunchIfNeeded() async throws -> Bool {
         try GuestGuard.requireVirtualMac()
         guard Bundle.main.bundleIdentifier == "dev.terminal-mac.guest" else { return false }
@@ -107,6 +148,15 @@ enum GuestBootstrap {
     }
     static func registerForGuestLogin() {
         guard Bundle.main.bundleIdentifier == "dev.terminal-mac.guest" else { return }
+        // Register the login item only from the installed copy. Guided setup has the user open
+        // TerminalMacGuest.app from the shared tools volume first; registering from that path
+        // pins the login item there, so every login the shared copy re-installs itself over
+        // ~/Applications (clobbering any newer installed helper) and launches beside the
+        // destination copy — duplicate instances. Registration from any other path is skipped;
+        // the installed copy registers itself on its next start.
+        let installed = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications/TerminalMacGuest.app")
+        guard Bundle.main.bundleURL.resolvingSymlinksInPath() == installed.resolvingSymlinksInPath() else { return }
         let preferences = UserDefaults.standard
         guard !preferences.bool(forKey: "requestedGuestLoginItem") else { return }
         do {
