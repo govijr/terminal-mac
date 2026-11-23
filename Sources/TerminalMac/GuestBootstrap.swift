@@ -148,6 +148,15 @@ enum GuestBootstrap {
     }
     static func registerForGuestLogin() {
         guard Bundle.main.bundleIdentifier == "dev.terminal-mac.guest" else { return }
+        // Register the login item only from the installed copy. Guided setup has the user open
+        // TerminalMacGuest.app from the shared tools volume first; registering from that path
+        // pins the login item there, so every login the shared copy re-installs itself over
+        // ~/Applications (clobbering any newer installed helper) and launches beside the
+        // destination copy — duplicate instances. Registration from any other path is skipped;
+        // the installed copy registers itself on its next start.
+        let installed = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications/TerminalMacGuest.app")
+        guard Bundle.main.bundleURL.resolvingSymlinksInPath() == installed.resolvingSymlinksInPath() else { return }
         let preferences = UserDefaults.standard
         guard !preferences.bool(forKey: "requestedGuestLoginItem") else { return }
         do {
