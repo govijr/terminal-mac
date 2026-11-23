@@ -156,6 +156,25 @@ The agent instructions are in [docs/AGENT.md](docs/AGENT.md). No global agent se
 
 Customize a new VM with `--cpus 4 --memory 4 --disk 64 --width 1280 --height 800` (width and height are in points; add `--standard` for a 1x display). CPU, memory and disk arguments are logical CPUs, GiB and GiB respectively. `--offline` omits the guest network device; the shared-folder control channel still works, though some macOS setup workflows may require networking.
 
+### macOS Recovery
+
+Boot a stopped VM from its macOS Recovery partition with `--recovery`:
+
+```sh
+./dist/terminal-mac start default --window --recovery
+```
+
+This passes `startUpFromMacOSRecovery` to the existing virtual machine, so its disk, identity and
+sparse storage are reused; the VM opens the familiar Recovery language chooser and then the
+Recovery assistant (Restore, Disk Utility, Terminal from the Utilities menu). Use it for tasks
+that need the Recovery environment, such as `csrutil` changes or system-volume repair — combine
+with `--window` to see and drive that interface.
+
+In Recovery the guest helper does not run: agent actions (`action`, the MCP tools) report the
+missing helper, while the lifecycle commands (`status`, which reports `mode: recovery`,
+`stop default --force`, `show`) keep working. `stop` exits the VM; `start default` then boots the
+normal system again.
+
 ### Networking
 
 By default the guest uses macOS NAT: the host hands out addresses on 192.168.64.0/24 and relays DNS at the gateway. VPN and proxy apps that run in TUN mode (Clash, Surge, sing-box and similar) can leave that relay silent, so the guest keeps an IP but cannot resolve names and looks offline. `--network user` instead bundles [gvproxy](https://github.com/containers/gvisor-tap-vsock) (Apache-2.0, the user-space network stack behind podman machine and vfkit) and runs DHCP, DNS and NAT in user space, with names resolved by the host's own resolver, so the guest stays online wherever the host is:
