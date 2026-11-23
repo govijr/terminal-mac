@@ -169,6 +169,9 @@ final class CLI {
             try GuestGuard.requireVirtualMac()
             if args.flags.contains("check") { print("virtual-mac"); return }
             if try await GuestBootstrap.installAndRelaunchIfNeeded() { return }
+            // Only the installed helper reaches this point; make the singleton deterministic
+            // across login-item and session-restoration double-launch before touching the mailbox.
+            try await GuestBootstrap.acquireSingleInstanceLock()
             await GuestBootstrap.replaceRunningInstances()
             let exchange = URL(fileURLWithPath: args.options["exchange"] ?? "/Volumes/My Shared Files/control")
             guest = try GuestRuntime(exchange: exchange)
