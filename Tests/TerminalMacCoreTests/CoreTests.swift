@@ -47,6 +47,43 @@ final class CoreTests: XCTestCase {
         }
         for name in ["default", "agent-1", "mac_test", "M2"] { XCTAssertNoThrow(try validateName(name)) }
     }
+    func testSharedFolderMustBeAnExistingAbsoluteDirectory() throws {
+        let root = try temporary()
+        let file = root.appendingPathComponent("file")
+        try Data().write(to: file)
+        for path in ["relative/dir", "~", "", root.appendingPathComponent("missing").path, file.path] {
+            XCTAssertThrowsError(try validateSharedFolder(path), path)
+        }
+        let builds = root.appendingPathComponent("builds")
+        try FileManager.default.createDirectory(at: builds, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: builds)
+        let canonical = try XCTUnwrap(realpath(builds.path, nil).map { String(cString: $0) })
+        XCTAssertEqual(try validateSharedFolder(builds.path), canonical)
+        XCTAssertEqual(try validateSharedFolder(link.path), canonical)
+    }
+    func testSharedFolderRejectsRootAndHomeEvenThroughSymlinks() throws {
+        let root = try temporary()
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("Projects"), withIntermediateDirectories: true)
+        let toHome = root.appendingPathComponent("to-home")
+        try FileManager.default.createSymbolicLink(at: toHome, withDestinationURL: home)
+        let toRoot = root.appendingPathComponent("to-root")
+        try FileManager.default.createSymbolicLink(atPath: toRoot.path, withDestinationPath: "/")
+        for path in ["/", "/.", toRoot.path, home.path, home.path + "/", home.path + "/Projects/..", toHome.path] {
+            XCTAssertThrowsError(try validateSharedFolder(path, home: home.path), path)
+        }
+        XCTAssertNoThrow(try validateSharedFolder(home.appendingPathComponent("Projects").path, home: home.path))
+        XCTAssertThrowsError(try validateSharedFolder(FileManager.default.homeDirectoryForCurrentUser.path))
+    }
+    func testMachineWithoutSharedFolderStillDecodes() throws {
+        let legacy = #"{"name":"work","cpu":4,"memoryGiB":4,"diskGiB":64,"width":1280,"height":800,"network":true,"installed":true,"scale":2}"#
+        let machine = try JSONDecoder().decode(Machine.self, from: Data(legacy.utf8))
+        XCTAssertEqual(machine.name, "work")
+        XCTAssertNil(machine.sharedFolder)
+        var shared = machine; shared.sharedFolder = "/Users/me/builds"
+        XCTAssertEqual(try JSONDecoder().decode(Machine.self, from: JSONEncoder().encode(shared)).sharedFolder, "/Users/me/builds")
+    }
     func testParserRejectsUnknownDuplicateAndMissingOptions() throws {
         XCTAssertThrowsError(try Arguments(["--force"], flags: ["offline"]))
         XCTAssertThrowsError(try Arguments(["--disk"], options: ["disk"]))

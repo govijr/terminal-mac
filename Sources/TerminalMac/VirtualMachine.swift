@@ -6,7 +6,7 @@ import Darwin
 
 @MainActor
 enum VirtualMachines {
-    static func configuration(_ machine: Machine, at directory: URL, tools: URL?, userNetwork: UserNetwork? = nil) throws -> VZVirtualMachineConfiguration {
+    static func configuration(_ machine: Machine, at directory: URL, tools: URL?, userNetwork: UserNetwork? = nil, sharedFolder: URL? = nil) throws -> VZVirtualMachineConfiguration {
         let config = VZVirtualMachineConfiguration()
         config.bootLoader = VZMacOSBootLoader()
         config.cpuCount = machine.cpu
@@ -42,6 +42,7 @@ enum VirtualMachines {
         }
         var shares: [String: VZSharedDirectory] = ["control": VZSharedDirectory(url: directory.appendingPathComponent("exchange"), readOnly: false)]
         if let tools { shares["tools"] = VZSharedDirectory(url: tools, readOnly: true) }
+        if let sharedFolder { shares["shared"] = VZSharedDirectory(url: sharedFolder, readOnly: true) }
         let filesystem = VZVirtioFileSystemDeviceConfiguration(tag: VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag)
         filesystem.share = VZMultipleDirectoryShare(directories: shares)
         config.directorySharingDevices = [filesystem]
@@ -74,8 +75,9 @@ enum VirtualMachines {
         let width = try args.integer("width", default: 1280, range: 800...3840)
         let height = try args.integer("height", default: 800, range: 600...2160)
         let networkMode = try Self.networkMode(args)
+        let sharedFolder = try args.options["share"].map { try validateSharedFolder($0) }
         let machine = Machine(name: name, cpu: cpu, memoryGiB: memory, diskGiB: disk, width: width, height: height, network: !args.flags.contains("offline"),
-                              scale: args.flags.contains("standard") ? 1 : 2, networkMode: networkMode)
+                              scale: args.flags.contains("standard") ? 1 : 2, networkMode: networkMode, sharedFolder: sharedFolder)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         _ = try Mailbox(directory.appendingPathComponent("exchange"), create: true)
         try requirements.hardwareModel.dataRepresentation.write(to: directory.appendingPathComponent("hardware.bin"))
@@ -88,6 +90,12 @@ enum VirtualMachines {
         try file.close()
         try store.save(machine)
         try await install(machine, at: directory, imageURL: imageURL, store: store)
+    }
+    /// The configured host folder, checked again at every boot so a missing folder stops the boot instead of being skipped.
+    static func sharedFolder(of machine: Machine) throws -> URL? {
+        guard let path = machine.sharedFolder else { return nil }
+        do { return URL(fileURLWithPath: try validateSharedFolder(path), isDirectory: true) }
+        catch { throw Failure("\(error.localizedDescription). Restore it, or change the share with: terminal-mac share \(machine.name) /absolute/path|--none") }
     }
     /// `--network nat|user`; `--offline` leaves the guest without a network device at all.
     static func networkMode(_ args: Arguments) throws -> String? {
@@ -154,7 +162,8 @@ final class MachineRuntime: NSObject, VZVirtualMachineDelegate, NSWindowDelegate
         guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { close(lock); throw Failure("VM is already running") }
         mailbox = try Mailbox(directory.appendingPathComponent("host-control"), create: true)
         userNetwork = machine.usesUserNetwork ? try UserNetwork(directory: directory, executable: gvproxy) : nil
-        vm = VZVirtualMachine(configuration: try VirtualMachines.configuration(machine, at: directory, tools: tools, userNetwork: userNetwork))
+        vm = VZVirtualMachine(configuration: try VirtualMachines.configuration(machine, at: directory, tools: tools, userNetwork: userNetwork,
+                                                                               sharedFolder: VirtualMachines.sharedFolder(of: machine)))
         super.init()
         vm.delegate = self
     }
@@ -195,7 +204,7 @@ final class MachineRuntime: NSObject, VZVirtualMachineDelegate, NSWindowDelegate
         do {
             var values: [String: String] = [:]
             switch request.action {
-            case "status": values = ["name": machine.name, "state": stateName, "pid": String(getpid()), "network": machine.networkDescription]
+            case "status": values = ["name": machine.name, "state": stateName, "pid": String(getpid()), "network": machine.networkDescription, "share": machine.sharedFolder ?? "none"]
             case "show": showWindow()
             case "hide":
                 // Hiding the app hands focus back to whatever was in front before, usually the terminal.
